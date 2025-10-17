@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>画面共有アプリ</title>
+<title>画面共有アプリ（改良版）</title>
 <style>
 body { font-family: Arial; text-align: center; margin:0; padding:0; background:#f5f5f5; }
 .container { padding:20px; }
 button { padding:10px 20px; margin:10px; font-size:16px; cursor:pointer; }
 .hidden { display:none; }
 input[type="text"] { padding:8px; font-size:16px; width:150px; text-align:center; }
-video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
+video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; background:black; }
 #shareStatus, #receiveStatus { font-weight: bold; }
 </style>
 </head>
@@ -32,7 +32,7 @@ video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
 
   <div class="preview hidden" id="screenPreview">
     <p>プレビュー</p>
-    <video id="previewVideo" autoplay></video><br>
+    <video id="previewVideo" autoplay playsinline></video><br>
     <button id="startShareBtn">この画面を共有しますか？</button>
     <button id="reselectBtn">もう一度選択</button>
   </div>
@@ -48,9 +48,9 @@ video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
   <button id="connectBtn">接続</button>
   <p>ステータス: <span id="receiveStatus" style="color:red;">未接続</span></p>
 
-  <div class="preview hidden" id="receivedScreen">
+  <div class="preview" id="receivedScreen"> <!-- ← hidden削除 -->
     <p>共有画面表示</p>
-    <video id="receivedVideo" autoplay></video>
+    <video id="receivedVideo" autoplay playsinline></video> <!-- ← playsinline追加 -->
   </div>
 
   <button id="backToHome2">ホームに戻る</button>
@@ -96,7 +96,6 @@ document.getElementById('backToHome2').addEventListener('click', () => {
   receiveStatus.style.color = 'red';
   addPage.classList.add('hidden');
   homePage.classList.remove('hidden');
-  receivedScreen.classList.add('hidden');
   if(pc) pc.close();
   if(ws) ws.close();
 });
@@ -129,10 +128,13 @@ document.getElementById('reselectBtn').addEventListener('click', async () => {
 
 // 安全にWebSocket送信
 function safeSend(msg) {
-  if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-  else ws.addEventListener('open', () => {
-    try { ws.send(JSON.stringify(msg)); } catch(e) { console.log('send失敗:', e); }
-  }, { once:true });
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  } else {
+    ws?.addEventListener('open', () => {
+      try { ws.send(JSON.stringify(msg)); } catch(e) { console.log('send失敗:', e); }
+    }, { once:true });
+  }
 }
 
 // WebRTC初期化
@@ -154,9 +156,10 @@ async function initWebRTC(code, isSender) {
   pc.onicecandidate = e => { if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate }); };
 
   pc.ontrack = e => {
+    console.log('📺 受信ストリーム到着');
     receivedVideo.srcObject = e.streams[0];
-    receivedScreen.classList.remove('hidden');          
-    receivedVideo.play().catch(err => console.log('受信映像再生失敗:', err));
+    receivedScreen.classList.remove('hidden');
+    receivedVideo.play().catch(err => console.log('🎬 再生エラー:', err));
   };
 
   ws.onopen = () => safeSend({ type:'join', code });
@@ -165,11 +168,13 @@ async function initWebRTC(code, isSender) {
     try {
       const data = JSON.parse(msg.data);
       if(data.type === 'offer' && !isSender) {
+        console.log('📩 offer 受信');
         await pc.setRemoteDescription(data.payload);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         safeSend({ type:'answer', code, payload:answer });
       } else if(data.type === 'answer' && isSender) {
+        console.log('📨 answer 受信');
         await pc.setRemoteDescription(data.payload);
       } else if(data.type === 'ice') {
         await pc.addIceCandidate(data.payload);
@@ -189,7 +194,6 @@ document.getElementById('startShareBtn').addEventListener('click', async () => {
   shareStatus.textContent = '共有中';
   shareStatus.style.color = 'green';
 
-  // 送信側で offer を作成して送信
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   safeSend({ type: 'offer', code: shareCodeSpan.textContent, payload: offer });
@@ -197,7 +201,9 @@ document.getElementById('startShareBtn').addEventListener('click', async () => {
 
 // 接続ボタン（受信側）
 document.getElementById('connectBtn').addEventListener('click', async () => {
-  await initWebRTC(document.getElementById('inputCode').value, false);
+  const code = document.getElementById('inputCode').value.trim();
+  if (!code) return alert('コードを入力してください');
+  await initWebRTC(code, false);
   receiveStatus.textContent = '接続中';
   receiveStatus.style.color = 'green';
 });
