@@ -136,7 +136,7 @@ function safeSend(msg) {
 }
 
 // WebRTC初期化
-function initWebRTC(code, isSender) {
+async function initWebRTC(code, isSender) {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   try {
     ws = new WebSocket(`${protocol}//${location.host}`);
@@ -155,7 +155,7 @@ function initWebRTC(code, isSender) {
 
   pc.ontrack = e => {
     receivedVideo.srcObject = e.streams[0];
-    receivedScreen.classList.remove('hidden');          // 表示タイミングをここに
+    receivedScreen.classList.remove('hidden');          
     receivedVideo.play().catch(err => console.log('受信映像再生失敗:', err));
   };
 
@@ -184,15 +184,20 @@ function initWebRTC(code, isSender) {
 }
 
 // 共有開始（送信側）
-document.getElementById('startShareBtn').addEventListener('click', () => {
-  initWebRTC(shareCodeSpan.textContent, true);
+document.getElementById('startShareBtn').addEventListener('click', async () => {
+  await initWebRTC(shareCodeSpan.textContent, true);
   shareStatus.textContent = '共有中';
   shareStatus.style.color = 'green';
+
+  // 送信側で offer を作成して送信
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  safeSend({ type: 'offer', code: shareCodeSpan.textContent, payload: offer });
 });
 
 // 接続ボタン（受信側）
-document.getElementById('connectBtn').addEventListener('click', () => {
-  initWebRTC(document.getElementById('inputCode').value, false);
+document.getElementById('connectBtn').addEventListener('click', async () => {
+  await initWebRTC(document.getElementById('inputCode').value, false);
   receiveStatus.textContent = '接続中';
   receiveStatus.style.color = 'green';
 });
