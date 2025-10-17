@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>簡易 画面共有アプリ (Single-file)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding:20px; }
+  .hidden { display:none; }
+  .center { display:flex; gap:10px; align-items:center; }
+  button { padding:10px 14px; font-size:16px; cursor:pointer; }
+  input { padding:8px; font-size:16px; }
+  #preview { width:640px; max-width:100%; border:1px solid #ccc; background:#000; }
+  .box { margin-top:16px; padding:12px; border:1px solid #eee; border-radius:8px; }
+  .muted { color:#666; font-size:14px; }
+  small { color:#666; display:block; margin-top:6px; }
+</style>
+</head>
+<body>
+
+<h1>画面共有アプリ（デモ）</h1>
+<p class="muted">はじめに「共有」か「追加」を選ぶ。6桁コードでマッチングするシンプル構成。😊</p>
+
+<div id="home" class="box">
+  <div class="center">
+    <button id="shareBtn">共有</button>
+    <button id="addBtn">追加</button>
+  </div>
+</div>
+
+<div id="sharePage" class="box hidden">
+  <div>生成コード: <strong id="roomCode">------</strong></div>
+  <small class="muted">このコードを画面を見る側に教える（数字6桁）</small>
+  <div style="margin-top:12px;">
+    <button id="setScreenBtn">画面をセット</button>
+    <button id="backFromShare">戻る</button>
+  </div>
+
+  <div id="previewArea" class="hidden" style="margin-top:12px">
+    <video id="preview" autoplay playsinline muted></video>
+    <div style="margin-top:8px;">
+      <button id="confirmShareBtn">この画面を共有しますか</button>
+      <button id="reselectBtn">もう一度選択</button>
+    </div>
+  </div>
+
+  <div id="shareStatus" class="muted" style="margin-top:10px"></div>
+</div>
+
+<div id="addPage" class="box hidden">
+  <div>共有コード入力</div>
+  <div style="margin-top:8px;">
+    <input id="joinCodeInput" placeholder="例：123456" maxlength="6" />
+    <button id="joinBtn">接続</button>
+    <button id="backFromAdd">戻る</button>
+  </div>
+  <div id="receiveArea" class="hidden" style="margin-top:12px">
+    <video id="remoteView" autoplay playsinline controls></video>
+  </div>
+  <div id="addStatus" class="muted" style="margin-top:10px"></div>
+</div>
+
+<hr />
+<div class="muted small">技術メモ：WebRTC + WebSocket シグナリングを使用。サーバは同一 Node プロセスで提供。</div>
+
+<script>
+/*
+  フロント一式。注意: シグナリング URL は自動計算するため、Render にデプロイしても設定不要。
+*/
+
+// auto-detect signaling URL (同じ origin にデプロイする想定)
+const SIGNALING_SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+
+// UI
+const shareBtn = document.getElementById('shareBtn');
+const addBtn = document.getElementById('addBtn');
+const home = document.getElementById('home');
+
+const sharePage = document.getElementById('sharePage');
+const addPage = document.getElementById('addPage');
+
+const roomCodeEl = document.getElementById('roomCode');
+const setScreenBtn = document.getElementById('setScreenBtn');
+const backFromShare = document.getElementById('backFromShare');
+
+const previewArea = document.getElementById('previewArea');
+const previewVideo = document.getElementById('preview');
+const confirmShareBtn = document.getElementById('confirmShareBtn');
+const reselectBtn = document.getElementById('reselectBtn');
+const shareStatus = document.getElementById('shareStatus');
+
+const joinCodeInput = document.getElementById('joinCodeInput');
+const joinBtn = document.getElementById('joinBtn');
+const backFromAdd = document.getElementById('backFromAdd');
+const receiveArea = document.getElementById('receiveArea');
+const remoteView = document.getElementById('remoteView');
+const addStatus = document.getElementById('addStatus');
+
+let ws = null;
+let role = null;
+let roomCode = null;
+let localStream = null;
+let pc = null;
+let dataChannel = null;
+
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+function gen6Code(){ return Math.floor(Math.random() * 1000000).toString().padStart(6,'0'); }
+function showHome(){ home.classList.remove('hidden'); sharePage.classList.add('hidden'); addPage.classList.add('hidden'); }
+function showSharePage(){ home.classList.add('hidden'); sharePage.classList.remove('hidden'); addPage.classList.add('hidden'); }
+function showAddPage(){ home.classList.add('hidden'); sharePage.classList.add('hidden'); addPage.classList.remove('hidden'); }
+
+function ensureWS(){
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  ws = new WebSocket(SIGNALING_SERVER_URL);
+  ws.addEventListener('open', ()=> {
+    appendStatus();
+  });
+  ws.addEventListener('message', (ev)=> {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(e){ return; }
+    handleSignalingMessage(msg);
+  });
+  ws.addEventListener('close', ()=> { appendStatus('シグナリング接続が切断された'); });
+  ws.addEventListener('error', ()=> { appendStatus('シグナリングでエラー発生'); });
+}
+function sendSignaling(obj){
+  if (!ws || ws.readyState !== WebSocket.OPEN){ appendStatus('シグナリング未接続。'); return; }
+  ws.send(JSON.stringify(obj));
+}
+
+async function handleSignalingMessage(msg){
+  if (msg.type === 'offer' && role === 'viewer'){
+    await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendSignaling({ action:'answer', code: roomCode, sdp: pc.localDescription });
+    appendStatus('answer 送信した。');
+  } else if (msg.type === 'answer' && role === 'sharer'){
+    await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    appendStatus('相手が接続した。共有開始。🎉');
+  } else if (msg.type === 'ice-candidate'){
+    try { await pc.addIceCandidate(msg.candidate); } catch(e){}
+  } else if (msg.type === 'peer-joined' && role === 'sharer'){
+    appendStatus('誰かが接続した。offer を送る準備を続ける。');
+  } else if (msg.type === 'error'){
+    appendStatus('エラー: ' + (msg.reason || '不明'));
+  }
+}
+
+function appendStatus(text){
+  if (role === 'sharer') shareStatus.textContent = text || '';
+  if (role === 'viewer') addStatus.textContent = text || '';
+}
+
+shareBtn.addEventListener('click', ()=>{
+  role = 'sharer';
+  roomCode = gen6Code();
+  roomCodeEl.textContent = roomCode;
+  showSharePage();
+  appendStatus('コード発行済み。次に「画面をセット」してプレビューを確認して。');
+  ensureWS();
+  setTimeout(()=> { if (ws && ws.readyState === WebSocket.OPEN) sendSignaling({ action: 'create', code: roomCode }); }, 200);
+});
+
+setScreenBtn.addEventListener('click', async ()=>{
+  try {
+    localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    previewVideo.srcObject = localStream;
+    previewArea.classList.remove('hidden');
+    appendStatus('画面選択完了。プレビューが表示される。');
+  } catch(e){
+    appendStatus('画面選択がキャンセルされた。');
+  }
+});
+
+reselectBtn.addEventListener('click', async ()=>{
+  if (localStream) localStream.getTracks().forEach(t=>t.stop());
+  localStream = null;
+  previewArea.classList.add('hidden');
+  appendStatus('再選択して。');
+});
+
+confirmShareBtn.addEventListener('click', async ()=>{
+  if (!localStream){ appendStatus('まず画面をセットして。'); return; }
+  appendStatus('共有を開始する。相手がコードで接続するまで待機。');
+  pc = new RTCPeerConnection(rtcConfig);
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  pc.addEventListener('icecandidate', (ev)=> { if (ev.candidate) sendSignaling({ action:'ice-candidate', code: roomCode, candidate: ev.candidate }); });
+  dataChannel = pc.createDataChannel('chat');
+  dataChannel.onopen = ()=> console.log('data channel open');
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ensureWS();
+  sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription });
+  appendStatus('offer 送信した。相手の answer を待つ。');
+});
+
+backFromShare.addEventListener('click', ()=>{
+  if (localStream) localStream.getTracks().forEach(t=>t.stop());
+  if (pc) pc.close();
+  pc = null; localStream = null; role = null;
+  showHome(); appendStatus('');
+});
+
+addBtn.addEventListener('click', ()=>{
+  role = 'viewer';
+  showAddPage();
+  appendStatus('コードを入力して接続して。');
+  ensureWS();
+});
+
+joinBtn.addEventListener('click', async ()=>{
+  const code = (joinCodeInput.value || '').trim();
+  if (!/^\d{6}$/.test(code)){ appendStatus('6桁の数字コードを入力して。'); return; }
+  roomCode = code;
+  appendStatus('接続処理を開始する。');
+  pc = new RTCPeerConnection(rtcConfig);
+  pc.addEventListener('track', (ev)=>{
+    try {
+      const [stream] = ev.streams;
+      remoteView.srcObject = stream;
+      receiveArea.classList.remove('hidden');
+      appendStatus('画面を受信中。');
+    } catch(e){}
+  });
+  pc.addEventListener('icecandidate', (ev)=> { if (ev.candidate) sendSignaling({ action:'ice-candidate', code: roomCode, candidate: ev.candidate }); });
+  pc.ondatachannel = (ev)=> { const ch = ev.channel; ch.onmessage = (e)=> console.log('dc recv', e.data); };
+  ensureWS();
+  sendSignaling({ action:'join', code: roomCode });
+  appendStatus('join 要求を送信した。しばらく待つ。');
+});
+
+backFromAdd.addEventListener('click', ()=>{
+  if (pc) pc.close();
+  pc = null; role = null; roomCode = null;
+  receiveArea.classList.add('hidden'); remoteView.srcObject = null; joinCodeInput.value = '';
+  showHome(); appendStatus('');
+});
+
+appendStatus('初期状態。共有か追加を選択して。');
+</script>
+</body>
+</html>
