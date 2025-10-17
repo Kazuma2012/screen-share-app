@@ -135,15 +135,15 @@ function safeSend(msg) {
   }, { once:true });
 }
 
+// WebRTC初期化
 function initWebRTC(code, isSender) {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'; 
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   try {
     ws = new WebSocket(`${protocol}//${location.host}`);
   } catch(e) {
     console.log('WebSocket作成失敗:', e);
     return;
   }
-
 
   pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
 
@@ -152,7 +152,12 @@ function initWebRTC(code, isSender) {
   }
 
   pc.onicecandidate = e => { if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate }); };
-  pc.ontrack = e => { receivedVideo.srcObject = e.streams[0]; };
+
+  pc.ontrack = e => {
+    receivedVideo.srcObject = e.streams[0];
+    receivedScreen.classList.remove('hidden');          // 表示タイミングをここに
+    receivedVideo.play().catch(err => console.log('受信映像再生失敗:', err));
+  };
 
   ws.onopen = () => safeSend({ type:'join', code });
 
@@ -160,14 +165,14 @@ function initWebRTC(code, isSender) {
     try {
       const data = JSON.parse(msg.data);
       if(data.type === 'offer' && !isSender) {
-        await pc.setRemoteDescription(data.payload).catch(e=>console.log('setRemoteDescription失敗:', e));
-        const answer = await pc.createAnswer().catch(e=>console.log('createAnswer失敗:', e));
-        await pc.setLocalDescription(answer).catch(e=>console.log('setLocalDescription失敗:', e));
+        await pc.setRemoteDescription(data.payload);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
         safeSend({ type:'answer', code, payload:answer });
       } else if(data.type === 'answer' && isSender) {
-        await pc.setRemoteDescription(data.payload).catch(e=>console.log('setRemoteDescription(answer)失敗:', e));
+        await pc.setRemoteDescription(data.payload);
       } else if(data.type === 'ice') {
-        await pc.addIceCandidate(data.payload).catch(e=>console.log('addIceCandidate失敗:', e));
+        await pc.addIceCandidate(data.payload);
       }
     } catch(e) {
       console.log('WebSocketメッセージ処理失敗:', e);
@@ -187,7 +192,6 @@ document.getElementById('startShareBtn').addEventListener('click', () => {
 
 // 接続ボタン（受信側）
 document.getElementById('connectBtn').addEventListener('click', () => {
-  receivedScreen.classList.remove('hidden');
   initWebRTC(document.getElementById('inputCode').value, false);
   receiveStatus.textContent = '接続中';
   receiveStatus.style.color = 'green';
