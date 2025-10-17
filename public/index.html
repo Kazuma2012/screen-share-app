@@ -11,17 +11,19 @@ button { padding:10px 20px; margin:10px; font-size:16px; cursor:pointer; }
 .hidden { display:none; }
 input[type="text"] { padding:8px; font-size:16px; width:150px; text-align:center; }
 video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
-#shareStatus { font-weight: bold; }
+#shareStatus, #receiveStatus { font-weight: bold; }
 </style>
 </head>
 <body>
 
+<!-- ホーム画面 -->
 <div class="container" id="homePage">
   <h1>画面共有アプリ</h1>
   <button id="shareBtn">共有</button>
   <button id="addBtn">追加</button>
 </div>
 
+<!-- 共有側画面 -->
 <div class="container hidden" id="sharePage">
   <h2>共有画面</h2>
   <p>あなたの共有コード: <span id="shareCode">000000</span></p>
@@ -38,11 +40,13 @@ video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
   <button id="backToHome1">ホームに戻る</button>
 </div>
 
+<!-- 受信側画面 -->
 <div class="container hidden" id="addPage">
   <h2>画面を追加</h2>
   <p>共有コードを入力してください:</p>
   <input type="text" id="inputCode" maxlength="6" placeholder="123456">
   <button id="connectBtn">接続</button>
+  <p>ステータス: <span id="receiveStatus" style="color:red;">未接続</span></p>
 
   <div class="preview hidden" id="receivedScreen">
     <p>共有画面表示</p>
@@ -62,6 +66,7 @@ const previewVideo = document.getElementById('previewVideo');
 const receivedVideo = document.getElementById('receivedVideo');
 const shareCodeSpan = document.getElementById('shareCode');
 const shareStatus = document.getElementById('shareStatus');
+const receiveStatus = document.getElementById('receiveStatus');
 
 let localStream = null;
 let pc = null;
@@ -87,6 +92,8 @@ document.getElementById('backToHome1').addEventListener('click', () => {
   if(ws) ws.close();
 });
 document.getElementById('backToHome2').addEventListener('click', () => {
+  receiveStatus.textContent = '未接続';
+  receiveStatus.style.color = 'red';
   addPage.classList.add('hidden');
   homePage.classList.remove('hidden');
   receivedScreen.classList.add('hidden');
@@ -166,7 +173,7 @@ function initWebRTC(code, isSender) {
   ws.onclose = e => console.log('WebSocket閉じました');
 }
 
-// 共有開始
+// 共有開始（送信側）
 document.getElementById('startShareBtn').addEventListener('click', () => {
   initWebRTC(shareCodeSpan.textContent, true);
   shareStatus.textContent = '共有中';
@@ -177,6 +184,8 @@ document.getElementById('startShareBtn').addEventListener('click', () => {
 document.getElementById('connectBtn').addEventListener('click', () => {
   receivedScreen.classList.remove('hidden');
   initWebRTC(document.getElementById('inputCode').value, false);
+  receiveStatus.textContent = '接続中';
+  receiveStatus.style.color = 'green';
 });
 </script>
 </body>
