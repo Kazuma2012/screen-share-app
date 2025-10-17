@@ -112,6 +112,15 @@ document.getElementById('reselectBtn').addEventListener('click', async () => {
   screenPreview.classList.add('hidden');
 });
 
+// **安全にWebSocket送信する関数**
+function safeSend(msg) {
+  if(ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  } else {
+    ws.addEventListener('open', () => ws.send(JSON.stringify(msg)), { once: true });
+  }
+}
+
 // WebSocketとWebRTC初期化
 function initWebRTC(code, isSender) {
   ws = new WebSocket(`wss://${location.host}`);
@@ -121,10 +130,10 @@ function initWebRTC(code, isSender) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   }
 
-  pc.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({ type:'ice', code, payload:e.candidate })); };
+  pc.onicecandidate = e => { if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate }); };
   pc.ontrack = e => { receivedVideo.srcObject = e.streams[0]; };
 
-  ws.onopen = () => ws.send(JSON.stringify({ type:'join', code }));
+  ws.onopen = () => safeSend({ type:'join', code });
 
   ws.onmessage = async (msg) => {
     const data = JSON.parse(msg.data);
@@ -133,7 +142,7 @@ function initWebRTC(code, isSender) {
       // 受信側は画面を送らない
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type:'answer', code, payload:answer }));
+      safeSend({ type:'answer', code, payload:answer });
     } else if(data.type === 'answer' && isSender) {
       await pc.setRemoteDescription(data.payload);
     } else if(data.type === 'ice') {
