@@ -102,6 +102,7 @@ document.getElementById('setScreenBtn').addEventListener('click', async () => {
     previewVideo.srcObject = localStream;
     screenPreview.classList.remove('hidden');
   } catch(e) {
+    console.log('画面取得失敗:', e);
     alert('画面共有が許可されませんでした');
   }
 });
@@ -112,43 +113,62 @@ document.getElementById('reselectBtn').addEventListener('click', async () => {
   screenPreview.classList.add('hidden');
 });
 
-// **安全にWebSocket送信する関数**
+// **安全にWebSocket送信**
 function safeSend(msg) {
   if(ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
   } else {
-    ws.addEventListener('open', () => ws.send(JSON.stringify(msg)), { once: true });
+    ws.addEventListener('open', () => {
+      try { ws.send(JSON.stringify(msg)); } catch(e) { console.log('send失敗:', e); }
+    }, { once: true });
   }
 }
 
 // WebSocketとWebRTC初期化
 function initWebRTC(code, isSender) {
-  ws = new WebSocket(`wss://${location.host}`);
+  try {
+    ws = new WebSocket(`wss://${location.host}`);
+  } catch(e) {
+    console.log('WebSocket作成失敗:', e);
+    return;
+  }
+
   pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
 
-  if(isSender) {
+  if(isSender && localStream) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   }
 
-  pc.onicecandidate = e => { if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate }); };
-  pc.ontrack = e => { receivedVideo.srcObject = e.streams[0]; };
+  pc.onicecandidate = e => {
+    if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate });
+  };
+
+  pc.ontrack = e => {
+    receivedVideo.srcObject = e.streams[0];
+  };
 
   ws.onopen = () => safeSend({ type:'join', code });
 
   ws.onmessage = async (msg) => {
-    const data = JSON.parse(msg.data);
-    if(data.type === 'offer' && !isSender) {
-      await pc.setRemoteDescription(data.payload);
-      // 受信側は画面を送らない
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      safeSend({ type:'answer', code, payload:answer });
-    } else if(data.type === 'answer' && isSender) {
-      await pc.setRemoteDescription(data.payload);
-    } else if(data.type === 'ice') {
-      await pc.addIceCandidate(data.payload);
+    try {
+      const data = JSON.parse(msg.data);
+      if(data.type === 'offer' && !isSender) {
+        await pc.setRemoteDescription(data.payload).catch(e=>console.log('setRemoteDescription失敗:', e));
+        const answer = await pc.createAnswer().catch(e=>console.log('createAnswer失敗:', e));
+        await pc.setLocalDescription(answer).catch(e=>console.log('setLocalDescription失敗:', e));
+        safeSend({ type:'answer', code, payload:answer });
+      } else if(data.type === 'answer' && isSender) {
+        await pc.setRemoteDescription(data.payload).catch(e=>console.log('setRemoteDescription(answer)失敗:', e));
+      } else if(data.type === 'ice') {
+        await pc.addIceCandidate(data.payload).catch(e=>console.log('addIceCandidate失敗:', e));
+      }
+    } catch(e) {
+      console.log('WebSocketメッセージ処理失敗:', e);
     }
   };
+
+  ws.onerror = e => console.log('WebSocketエラー:', e);
+  ws.onclose = e => console.log('WebSocket閉じました');
 }
 
 // 共有開始
