@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画面共有アプリ</title>
+<style>
+  body { font-family: Arial; text-align: center; margin:0; padding:0; background:#f5f5f5; }
+  .container { padding:20px; }
+  button { padding:10px 20px; margin:10px; font-size:16px; cursor:pointer; }
+  .hidden { display:none; }
+  input[type="text"] { padding:8px; font-size:16px; width:150px; text-align:center; }
+  video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
+</style>
+</head>
+<body>
+
+<div class="container" id="homePage">
+  <h1>画面共有アプリ</h1>
+  <button id="shareBtn">共有</button>
+  <button id="addBtn">追加</button>
+</div>
+
+<div class="container hidden" id="sharePage">
+  <h2>共有画面</h2>
+  <p>あなたの共有コード: <span id="shareCode">000000</span></p>
+  <button id="setScreenBtn">画面をセット</button>
+
+  <div class="preview hidden" id="screenPreview">
+    <p>プレビュー</p>
+    <video id="previewVideo" autoplay></video><br>
+    <button id="startShareBtn">この画面を共有しますか？</button>
+    <button id="reselectBtn">もう一度選択</button>
+  </div>
+
+  <button id="backToHome1">ホームに戻る</button>
+</div>
+
+<div class="container hidden" id="addPage">
+  <h2>画面を追加</h2>
+  <p>共有コードを入力してください:</p>
+  <input type="text" id="inputCode" maxlength="6" placeholder="123456">
+  <button id="connectBtn">接続</button>
+
+  <div class="preview hidden" id="receivedScreen">
+    <p>共有画面表示</p>
+    <video id="receivedVideo" autoplay></video>
+  </div>
+
+  <button id="backToHome2">ホームに戻る</button>
+</div>
+
+<script>
+const homePage = document.getElementById('homePage');
+const sharePage = document.getElementById('sharePage');
+const addPage = document.getElementById('addPage');
+const screenPreview = document.getElementById('screenPreview');
+const receivedScreen = document.getElementById('receivedScreen');
+const previewVideo = document.getElementById('previewVideo');
+const receivedVideo = document.getElementById('receivedVideo');
+const shareCodeSpan = document.getElementById('shareCode');
+
+let localStream = null;
+let pc = null;
+let ws = null;
+
+// ページ切替
+document.getElementById('shareBtn').addEventListener('click', () => {
+  homePage.classList.add('hidden');
+  sharePage.classList.remove('hidden');
+});
+document.getElementById('addBtn').addEventListener('click', () => {
+  homePage.classList.add('hidden');
+  addPage.classList.remove('hidden');
+});
+document.getElementById('backToHome1').addEventListener('click', () => {
+  sharePage.classList.add('hidden');
+  homePage.classList.remove('hidden');
+  screenPreview.classList.add('hidden');
+  if(localStream) localStream.getTracks().forEach(t=>t.stop());
+  if(pc) pc.close();
+  if(ws) ws.close();
+});
+document.getElementById('backToHome2').addEventListener('click', () => {
+  addPage.classList.add('hidden');
+  homePage.classList.remove('hidden');
+  receivedScreen.classList.add('hidden');
+  if(pc) pc.close();
+  if(ws) ws.close();
+});
+
+// 6桁コード生成
+function generateCode() {
+  return Math.floor(100000 + Math.random() * 900000);
+}
+
+// 画面セット
+document.getElementById('setScreenBtn').addEventListener('click', async () => {
+  shareCodeSpan.textContent = generateCode();
+  try {
+    localStream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+    previewVideo.srcObject = localStream;
+    screenPreview.classList.remove('hidden');
+  } catch(e) {
+    alert('画面共有が許可されませんでした');
+  }
+});
+
+// もう一度選択
+document.getElementById('reselectBtn').addEventListener('click', async () => {
+  if(localStream) localStream.getTracks().forEach(t=>t.stop());
+  screenPreview.classList.add('hidden');
+});
+
+// WebSocketとWebRTC初期化
+function initWebRTC(code, isSender) {
+  ws = new WebSocket(`wss://${location.host}`);
+  pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
+
+  if(isSender) {
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  }
+
+  pc.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({ type:'ice', code, payload:e.candidate })); };
+  pc.ontrack = e => { receivedVideo.srcObject = e.streams[0]; };
+
+  ws.onopen = () => ws.send(JSON.stringify({ type:'join', code }));
+
+  ws.onmessage = async (msg) => {
+    const data = JSON.parse(msg.data);
+    if(data.type === 'offer' && !isSender) {
+      await pc.setRemoteDescription(data.payload);
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type:'answer', code, payload:answer }));
+    } else if(data.type === 'answer' && isSender) {
+      await pc.setRemoteDescription(data.payload);
+    } else if(data.type === 'ice') {
+      await pc.addIceCandidate(data.payload);
+    }
+  };
+}
+
+// 共有開始
+document.getElementById('startShareBtn').addEventListener('click', () => {
+  initWebRTC(shareCodeSpan.textContent, true);
+});
+
+// 接続ボタン（受信側）
+document.getElementById('connectBtn').addEventListener('click', () => {
+  receivedScreen.classList.remove('hidden');
+  initWebRTC(document.getElementById('inputCode').value, false);
+});
+</script>
+</body>
+</html>
