@@ -11,6 +11,7 @@ button { padding:10px 20px; margin:10px; font-size:16px; cursor:pointer; }
 .hidden { display:none; }
 input[type="text"] { padding:8px; font-size:16px; width:150px; text-align:center; }
 video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
+#shareStatus { font-weight: bold; }
 </style>
 </head>
 <body>
@@ -24,6 +25,7 @@ video { border:1px solid #ccc; width:80%; max-width:600px; margin-top:10px; }
 <div class="container hidden" id="sharePage">
   <h2>共有画面</h2>
   <p>あなたの共有コード: <span id="shareCode">000000</span></p>
+  <p>ステータス: <span id="shareStatus" style="color:red;">未共有</span></p>
   <button id="setScreenBtn">画面をセット</button>
 
   <div class="preview hidden" id="screenPreview">
@@ -59,6 +61,7 @@ const receivedScreen = document.getElementById('receivedScreen');
 const previewVideo = document.getElementById('previewVideo');
 const receivedVideo = document.getElementById('receivedVideo');
 const shareCodeSpan = document.getElementById('shareCode');
+const shareStatus = document.getElementById('shareStatus');
 
 let localStream = null;
 let pc = null;
@@ -74,6 +77,8 @@ document.getElementById('addBtn').addEventListener('click', () => {
   addPage.classList.remove('hidden');
 });
 document.getElementById('backToHome1').addEventListener('click', () => {
+  shareStatus.textContent = '未共有';
+  shareStatus.style.color = 'red';
   sharePage.classList.add('hidden');
   homePage.classList.remove('hidden');
   screenPreview.classList.add('hidden');
@@ -109,29 +114,24 @@ document.getElementById('setScreenBtn').addEventListener('click', async () => {
 
 // もう一度選択
 document.getElementById('reselectBtn').addEventListener('click', async () => {
+  shareStatus.textContent = '未共有';
+  shareStatus.style.color = 'red';
   if(localStream) localStream.getTracks().forEach(t=>t.stop());
   screenPreview.classList.add('hidden');
 });
 
-// **安全にWebSocket送信**
+// 安全にWebSocket送信
 function safeSend(msg) {
-  if(ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
-  } else {
-    ws.addEventListener('open', () => {
-      try { ws.send(JSON.stringify(msg)); } catch(e) { console.log('send失敗:', e); }
-    }, { once: true });
-  }
+  if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  else ws.addEventListener('open', () => {
+    try { ws.send(JSON.stringify(msg)); } catch(e) { console.log('send失敗:', e); }
+  }, { once:true });
 }
 
 // WebSocketとWebRTC初期化
 function initWebRTC(code, isSender) {
-  try {
-    ws = new WebSocket(`wss://${location.host}`);
-  } catch(e) {
-    console.log('WebSocket作成失敗:', e);
-    return;
-  }
+  try { ws = new WebSocket(`wss://${location.host}`); } 
+  catch(e){ console.log('WebSocket作成失敗:', e); return; }
 
   pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
 
@@ -139,13 +139,8 @@ function initWebRTC(code, isSender) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   }
 
-  pc.onicecandidate = e => {
-    if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate });
-  };
-
-  pc.ontrack = e => {
-    receivedVideo.srcObject = e.streams[0];
-  };
+  pc.onicecandidate = e => { if(e.candidate) safeSend({ type:'ice', code, payload:e.candidate }); };
+  pc.ontrack = e => { receivedVideo.srcObject = e.streams[0]; };
 
   ws.onopen = () => safeSend({ type:'join', code });
 
@@ -174,6 +169,8 @@ function initWebRTC(code, isSender) {
 // 共有開始
 document.getElementById('startShareBtn').addEventListener('click', () => {
   initWebRTC(shareCodeSpan.textContent, true);
+  shareStatus.textContent = '共有中';
+  shareStatus.style.color = 'green';
 });
 
 // 接続ボタン（受信側）
