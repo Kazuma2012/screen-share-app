@@ -68,10 +68,10 @@
   フロント一式。注意: シグナリング URL は自動計算するため、Render にデプロイしても設定不要。
 */
 
-// auto-detect signaling URL (同じ origin にデプロイする想定)
+// auto-detect signaling URL
 const SIGNALING_SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 
-// UI
+// UI 要素
 const shareBtn = document.getElementById('shareBtn');
 const addBtn = document.getElementById('addBtn');
 const home = document.getElementById('home');
@@ -113,9 +113,6 @@ function showAddPage(){ home.classList.add('hidden'); sharePage.classList.add('h
 function ensureWS(){
   if (ws && ws.readyState === WebSocket.OPEN) return;
   ws = new WebSocket(SIGNALING_SERVER_URL);
-  ws.addEventListener('open', ()=> {
-    appendStatus();
-  });
   ws.addEventListener('message', (ev)=> {
     let msg;
     try { msg = JSON.parse(ev.data); } catch(e){ return; }
@@ -124,6 +121,7 @@ function ensureWS(){
   ws.addEventListener('close', ()=> { appendStatus('シグナリング接続が切断された'); });
   ws.addEventListener('error', ()=> { appendStatus('シグナリングでエラー発生'); });
 }
+
 function sendSignaling(obj){
   if (!ws || ws.readyState !== WebSocket.OPEN){ appendStatus('シグナリング未接続。'); return; }
   ws.send(JSON.stringify(obj));
@@ -153,6 +151,7 @@ function appendStatus(text){
   if (role === 'viewer') addStatus.textContent = text || '';
 }
 
+// --- 共有者 ---
 shareBtn.addEventListener('click', ()=>{
   role = 'sharer';
   roomCode = gen6Code();
@@ -160,7 +159,10 @@ shareBtn.addEventListener('click', ()=>{
   showSharePage();
   appendStatus('コード発行済み。次に「画面をセット」してプレビューを確認して。');
   ensureWS();
-  setTimeout(()=> { if (ws && ws.readyState === WebSocket.OPEN) sendSignaling({ action: 'create', code: roomCode }); }, 200);
+  setTimeout(()=> { 
+    if (ws && ws.readyState === WebSocket.OPEN) sendSignaling({ action: 'create', code: roomCode }); 
+    else ws.addEventListener('open', ()=> sendSignaling({ action:'create', code: roomCode }), { once: true });
+  }, 200);
 });
 
 setScreenBtn.addEventListener('click', async ()=>{
@@ -192,7 +194,8 @@ confirmShareBtn.addEventListener('click', async ()=>{
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   ensureWS();
-  sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription });
+  if (ws.readyState === WebSocket.OPEN) sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription });
+  else ws.addEventListener('open', ()=> sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription }), { once: true });
   appendStatus('offer 送信した。相手の answer を待つ。');
 });
 
@@ -203,6 +206,7 @@ backFromShare.addEventListener('click', ()=>{
   showHome(); appendStatus('');
 });
 
+// --- 視聴者 ---
 addBtn.addEventListener('click', ()=>{
   role = 'viewer';
   showAddPage();
@@ -215,19 +219,26 @@ joinBtn.addEventListener('click', async ()=>{
   if (!/^\d{6}$/.test(code)){ appendStatus('6桁の数字コードを入力して。'); return; }
   roomCode = code;
   appendStatus('接続処理を開始する。');
+
   pc = new RTCPeerConnection(rtcConfig);
   pc.addEventListener('track', (ev)=>{
-    try {
-      const [stream] = ev.streams;
-      remoteView.srcObject = stream;
-      receiveArea.classList.remove('hidden');
-      appendStatus('画面を受信中。');
-    } catch(e){}
+    const [stream] = ev.streams;
+    remoteView.srcObject = stream;
+    receiveArea.classList.remove('hidden');
+    appendStatus('画面を受信中。');
   });
   pc.addEventListener('icecandidate', (ev)=> { if (ev.candidate) sendSignaling({ action:'ice-candidate', code: roomCode, candidate: ev.candidate }); });
   pc.ondatachannel = (ev)=> { const ch = ev.channel; ch.onmessage = (e)=> console.log('dc recv', e.data); };
+
   ensureWS();
-  sendSignaling({ action:'join', code: roomCode });
+
+  // ✅ WebSocketがopenになるまで待ってからjoin送信
+  if (ws.readyState === WebSocket.OPEN) {
+    sendSignaling({ action:'join', code: roomCode });
+  } else {
+    ws.addEventListener('open', ()=> sendSignaling({ action:'join', code: roomCode }), { once: true });
+  }
+
   appendStatus('join 要求を送信した。しばらく待つ。');
 });
 
