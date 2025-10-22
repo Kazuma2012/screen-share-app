@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
-const robot = require('robotjs'); // ←追加
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,7 +15,6 @@ const wss = new WebSocket.Server({ server });
 console.log('Starting signaling server...');
 
 const rooms = {}; // code -> { owner: ws, viewer: ws, pendingOffer?: sdp }
-const screenSize = robot.getScreenSize(); // ←画面サイズ取得
 
 wss.on('connection', (ws) => {
   ws.on('message', (msg) => {
@@ -24,24 +22,17 @@ wss.on('connection', (ws) => {
     try { parsed = JSON.parse(msg.toString()); } catch(e){ return; }
     const { action, code, sdp, candidate } = parsed;
 
-    // --- OSレベルリモート操作イベント追加 ---
+    // --- Remote Event 中継 ---
     if (action === 'remote-event') {
-      const event = parsed.event;
-      try {
-        if(event.type === 'mousemove') {
-          const scaleX = screenSize.width / event.videoWidth;
-          const scaleY = screenSize.height / event.videoHeight;
-          robot.moveMouse(event.x * scaleX, event.y * scaleY);
-        }
-        if(event.type === 'click') robot.mouseClick(event.button === 2 ? 'right' : 'left');
-        if(event.type === 'keydown') robot.keyToggle(event.key, 'down');
-        if(event.type === 'keyup') robot.keyToggle(event.key, 'up');
-      } catch(e) { console.error('remote-event error:', e); }
+      const room = rooms[code];
+      if (!room) return;
+      if (room.owner && room.owner.readyState === WebSocket.OPEN) {
+        room.owner.send(JSON.stringify({ type: 'remote-event', event: parsed.event }));
+      }
       return;
     }
-    // --- ここまで追加 ---
 
-    // 既存の画面共有処理そのまま
+    // --- 既存の画面共有処理 ---
     if (action === 'create') {
       rooms[code] = rooms[code] || {};
       rooms[code].owner = ws;
@@ -84,12 +75,10 @@ wss.on('connection', (ws) => {
     }
     if (action === 'ice-candidate') {
       const room = rooms[code];
-      if (
-        ws._role === 'owner' && room && room.viewer && room.viewer.readyState === WebSocket.OPEN
-      ) room.viewer.send(JSON.stringify({ type: 'ice-candidate', candidate }));
-      else if (
-        ws._role === 'viewer' && room && room.owner && room.owner.readyState === WebSocket.OPEN
-      ) room.owner.send(JSON.stringify({ type: 'ice-candidate', candidate }));
+      if (ws._role === 'owner' && room && room.viewer && room.viewer.readyState === WebSocket.OPEN)
+        room.viewer.send(JSON.stringify({ type: 'ice-candidate', candidate }));
+      else if (ws._role === 'viewer' && room && room.owner && room.owner.readyState === WebSocket.OPEN)
+        room.owner.send(JSON.stringify({ type: 'ice-candidate', candidate }));
       return;
     }
   });
