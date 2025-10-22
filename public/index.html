@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>簡易 画面共有アプリ (Single-file)</title>
+<title>簡易 画面共有アプリ (Cloud対応版)</title>
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding:20px; }
   .hidden { display:none; }
@@ -14,6 +14,7 @@
   .box { margin-top:16px; padding:12px; border:1px solid #eee; border-radius:8px; }
   .muted { color:#666; font-size:14px; }
   small { color:#666; display:block; margin-top:6px; }
+  #fakeCursor { position:absolute;width:12px;height:12px;background:red;border-radius:50%;pointer-events:none;display:none; }
 </style>
 </head>
 <body>
@@ -54,14 +55,15 @@
     <button id="joinBtn">接続</button>
     <button id="backFromAdd">戻る</button>
   </div>
-  <div id="receiveArea" class="hidden" style="margin-top:12px">
-    <video id="remoteView" autoplay playsinline controls></video>
+  <div id="receiveArea" class="hidden" style="margin-top:12px; position:relative;">
+    <video id="remoteView" autoplay playsinline controls style="width:100%;"></video>
+    <div id="fakeCursor"></div>
   </div>
   <div id="addStatus" class="muted" style="margin-top:10px"></div>
 </div>
 
 <hr />
-<div class="muted small">技術メモ：WebRTC + WebSocket シグナリングを使用。サーバは同一 Node プロセスで提供。</div>
+<div class="muted small">技術メモ：WebRTC + WebSocket シグナリングを使用。OS操作は行わず、ブラウザ内で操作を擬似的に反映。</div>
 
 <script>
 const SIGNALING_SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
@@ -89,6 +91,8 @@ const backFromAdd = document.getElementById('backFromAdd');
 const receiveArea = document.getElementById('receiveArea');
 const remoteView = document.getElementById('remoteView');
 const addStatus = document.getElementById('addStatus');
+
+const fakeCursor = document.getElementById('fakeCursor');
 
 let ws = null;
 let role = null;
@@ -135,6 +139,8 @@ async function handleSignalingMessage(msg){
     try { await pc.addIceCandidate(msg.candidate); } catch(e){}
   } else if (msg.type === 'peer-joined' && role === 'sharer'){
     appendStatus('誰かが接続した。offer を送る準備を続ける。');
+  } else if (msg.type === 'remote-event' && role === 'sharer'){
+    handleRemoteEvent(msg.event);
   } else if (msg.type === 'error'){
     appendStatus('エラー: ' + (msg.reason || '不明'));
   }
@@ -145,131 +151,119 @@ function appendStatus(text){
   if (role === 'viewer') addStatus.textContent = text || '';
 }
 
+// --- viewer からの remote-event 受信処理 ---
+function handleRemoteEvent(event){
+  if(event.type==='mousemove'){
+    fakeCursor.style.display='block';
+    fakeCursor.style.left = event.x + 'px';
+    fakeCursor.style.top = event.y + 'px';
+  }
+  if(event.type==='click'){
+    fakeCursor.style.transform='scale(1.5)';
+    setTimeout(()=>fakeCursor.style.transform='scale(1)',100);
+  }
+  if(event.type==='keydown'){
+    const input = document.querySelector('input:focus');
+    if(input) input.value += event.key;
+  }
+}
+
 // --- 共有者 ---
 shareBtn.addEventListener('click', ()=>{
-  role = 'sharer';
-  roomCode = gen6Code();
-  roomCodeEl.textContent = roomCode;
+  role='sharer';
+  roomCode=gen6Code();
+  roomCodeEl.textContent=roomCode;
   showSharePage();
   appendStatus('コード発行済み。次に「画面をセット」してプレビューを確認して。');
   ensureWS();
-  setTimeout(()=> { 
-    if (ws && ws.readyState === WebSocket.OPEN) sendSignaling({ action: 'create', code: roomCode }); 
-    else ws.addEventListener('open', ()=> sendSignaling({ action:'create', code: roomCode }), { once: true });
-  }, 200);
+  setTimeout(()=>{ 
+    if(ws && ws.readyState===WebSocket.OPEN) sendSignaling({ action:'create', code:roomCode });
+    else ws.addEventListener('open', ()=> sendSignaling({ action:'create', code:roomCode }), { once:true });
+  },200);
 });
 
 setScreenBtn.addEventListener('click', async ()=>{
   try {
-    localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    localStream = await navigator.mediaDevices.getDisplayMedia({ video:true,audio:true });
     previewVideo.srcObject = localStream;
     previewArea.classList.remove('hidden');
     appendStatus('画面選択完了。プレビューが表示される。');
-  } catch(e){
-    appendStatus('画面選択がキャンセルされた。');
-  }
+  } catch(e){ appendStatus('画面選択がキャンセルされた。'); }
 });
 
-reselectBtn.addEventListener('click', async ()=>{
-  if (localStream) localStream.getTracks().forEach(t=>t.stop());
-  localStream = null;
+reselectBtn.addEventListener('click', ()=>{
+  if(localStream) localStream.getTracks().forEach(t=>t.stop());
+  localStream=null;
   previewArea.classList.add('hidden');
   appendStatus('再選択して。');
 });
 
 confirmShareBtn.addEventListener('click', async ()=>{
-  if (!localStream){ appendStatus('まず画面をセットして。'); return; }
+  if(!localStream){ appendStatus('まず画面をセットして。'); return; }
   appendStatus('共有を開始する。相手がコードで接続するまで待機。');
   pc = new RTCPeerConnection(rtcConfig);
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-  pc.addEventListener('icecandidate', (ev)=> { if (ev.candidate) sendSignaling({ action:'ice-candidate', code: roomCode, candidate: ev.candidate }); });
+  pc.addEventListener('icecandidate', (ev)=>{ if(ev.candidate) sendSignaling({ action:'ice-candidate', code:roomCode, candidate:ev.candidate }); });
   dataChannel = pc.createDataChannel('chat');
-  dataChannel.onopen = ()=> console.log('data channel open');
+  dataChannel.onopen=()=>console.log('data channel open');
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   ensureWS();
-  if (ws.readyState === WebSocket.OPEN) sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription });
-  else ws.addEventListener('open', ()=> sendSignaling({ action:'offer', code: roomCode, sdp: pc.localDescription }), { once: true });
+  if(ws.readyState===WebSocket.OPEN) sendSignaling({ action:'offer', code:roomCode, sdp:pc.localDescription });
+  else ws.addEventListener('open', ()=> sendSignaling({ action:'offer', code:roomCode, sdp:pc.localDescription }), { once:true });
   appendStatus('offer 送信した。相手の answer を待つ。');
 });
 
 backFromShare.addEventListener('click', ()=>{
-  if (localStream) localStream.getTracks().forEach(t=>t.stop());
-  if (pc) pc.close();
-  pc = null; localStream = null; role = null;
+  if(localStream) localStream.getTracks().forEach(t=>t.stop());
+  if(pc) pc.close();
+  pc=null; localStream=null; role=null;
   showHome(); appendStatus('');
 });
 
 // --- 視聴者 ---
 addBtn.addEventListener('click', ()=>{
-  role = 'viewer';
+  role='viewer';
   showAddPage();
   appendStatus('コードを入力して接続して。');
   ensureWS();
 });
 
 joinBtn.addEventListener('click', async ()=>{
-  const code = (joinCodeInput.value || '').trim();
-  if (!/^\d{6}$/.test(code)){ appendStatus('6桁の数字コードを入力して。'); return; }
-  roomCode = code;
+  const code = (joinCodeInput.value||'').trim();
+  if(!/^\d{6}$/.test(code)){ appendStatus('6桁の数字コードを入力して。'); return; }
+  roomCode=code;
   appendStatus('接続処理を開始する。');
 
   pc = new RTCPeerConnection(rtcConfig);
-  pc.addEventListener('track', (ev)=>{
+  pc.addEventListener('track', ev=>{
     const [stream] = ev.streams;
-    remoteView.srcObject = stream;
+    remoteView.srcObject=stream;
     receiveArea.classList.remove('hidden');
     appendStatus('画面を受信中。');
   });
-  pc.addEventListener('icecandidate', (ev)=> { if (ev.candidate) sendSignaling({ action:'ice-candidate', code: roomCode, candidate: ev.candidate }); });
-  pc.ondatachannel = (ev)=> { const ch = ev.channel; ch.onmessage = (e)=> console.log('dc recv', e.data); };
+  pc.addEventListener('icecandidate', ev=>{ if(ev.candidate) sendSignaling({ action:'ice-candidate', code:roomCode, candidate:ev.candidate }); });
+  pc.ondatachannel = ev=>{ const ch = ev.channel; ch.onmessage=e=>console.log('dc recv',e.data); };
 
   ensureWS();
+  if(ws.readyState===WebSocket.OPEN) sendSignaling({ action:'join', code:roomCode });
+  else ws.addEventListener('open', ()=> sendSignaling({ action:'join', code:roomCode }), { once:true });
 
-  if (ws.readyState === WebSocket.OPEN) {
-    sendSignaling({ action:'join', code: roomCode });
-  } else {
-    ws.addEventListener('open', ()=> sendSignaling({ action:'join', code: roomCode }), { once: true });
+  // --- viewer 操作送信 ---
+  function sendRemoteEvent(ev){
+    if(!ws || ws.readyState!==WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ action:'remote-event', code:roomCode, event:ev }));
   }
 
-  appendStatus('join 要求を送信した。しばらく待つ。');
-
-  // --- ここから追加: OSレベル操作イベント送信 ---
-  function sendRemoteEvent(ev) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ action:'remote-event', code: roomCode, event: ev }));
-  }
-
-  remoteView.addEventListener('mousemove', e => {
-    sendRemoteEvent({
-      type:'mousemove',
-      x:e.offsetX,
-      y:e.offsetY,
-      videoWidth: remoteView.videoWidth,
-      videoHeight: remoteView.videoHeight
-    });
-  });
-
-  remoteView.addEventListener('click', e => {
-    sendRemoteEvent({
-      type:'click',
-      x:e.offsetX,
-      y:e.offsetY,
-      button:e.button,
-      videoWidth: remoteView.videoWidth,
-      videoHeight: remoteView.videoHeight
-    });
-  });
-
-  document.addEventListener('keydown', e => sendRemoteEvent({ type:'keydown', key:e.key }));
-  document.addEventListener('keyup', e => sendRemoteEvent({ type:'keyup', key:e.key }));
-  // --- ここまで追加 ---
+  remoteView.addEventListener('mousemove', e=>sendRemoteEvent({ type:'mousemove', x:e.offsetX, y:e.offsetY }));
+  remoteView.addEventListener('click', e=>sendRemoteEvent({ type:'click', x:e.offsetX, y:e.offsetY }));
+  document.addEventListener('keydown', e=>sendRemoteEvent({ type:'keydown', key:e.key }));
 });
 
 backFromAdd.addEventListener('click', ()=>{
-  if (pc) pc.close();
-  pc = null; role = null; roomCode = null;
-  receiveArea.classList.add('hidden'); remoteView.srcObject = null; joinCodeInput.value = '';
+  if(pc) pc.close();
+  pc=null; role=null; roomCode=null;
+  receiveArea.classList.add('hidden'); remoteView.srcObject=null; joinCodeInput.value='';
   showHome(); appendStatus('');
 });
 
