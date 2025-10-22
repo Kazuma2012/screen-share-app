@@ -64,14 +64,8 @@
 <div class="muted small">技術メモ：WebRTC + WebSocket シグナリングを使用。サーバは同一 Node プロセスで提供。</div>
 
 <script>
-/*
-  フロント一式。注意: シグナリング URL は自動計算するため、Render にデプロイしても設定不要。
-*/
-
-// auto-detect signaling URL
 const SIGNALING_SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 
-// UI 要素
 const shareBtn = document.getElementById('shareBtn');
 const addBtn = document.getElementById('addBtn');
 const home = document.getElementById('home');
@@ -232,7 +226,6 @@ joinBtn.addEventListener('click', async ()=>{
 
   ensureWS();
 
-  // ✅ WebSocketがopenになるまで待ってからjoin送信
   if (ws.readyState === WebSocket.OPEN) {
     sendSignaling({ action:'join', code: roomCode });
   } else {
@@ -240,6 +233,37 @@ joinBtn.addEventListener('click', async ()=>{
   }
 
   appendStatus('join 要求を送信した。しばらく待つ。');
+
+  // --- ここから追加: OSレベル操作イベント送信 ---
+  function sendRemoteEvent(ev) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ action:'remote-event', code: roomCode, event: ev }));
+  }
+
+  remoteView.addEventListener('mousemove', e => {
+    sendRemoteEvent({
+      type:'mousemove',
+      x:e.offsetX,
+      y:e.offsetY,
+      videoWidth: remoteView.videoWidth,
+      videoHeight: remoteView.videoHeight
+    });
+  });
+
+  remoteView.addEventListener('click', e => {
+    sendRemoteEvent({
+      type:'click',
+      x:e.offsetX,
+      y:e.offsetY,
+      button:e.button,
+      videoWidth: remoteView.videoWidth,
+      videoHeight: remoteView.videoHeight
+    });
+  });
+
+  document.addEventListener('keydown', e => sendRemoteEvent({ type:'keydown', key:e.key }));
+  document.addEventListener('keyup', e => sendRemoteEvent({ type:'keyup', key:e.key }));
+  // --- ここまで追加 ---
 });
 
 backFromAdd.addEventListener('click', ()=>{
@@ -250,7 +274,6 @@ backFromAdd.addEventListener('click', ()=>{
 });
 
 appendStatus('初期状態。共有か追加を選択して。');
-
 </script>
 </body>
 </html>
